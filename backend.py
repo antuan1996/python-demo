@@ -8,8 +8,18 @@ from autobahn.twisted.wamp import ApplicationSession, ApplicationRunner
 
 
 class Dbase(ApplicationSession):
+    def __init__(self, config):
+        super().__init__(config)
+        print(self.config.extra["database_name"])
+        self.con = sqlite3.connect(environ["database_name"])
+        self.cur = self.con.cursor()
+        self.cur.execute("PRAGMA foreign_keys = ON")
+        self.start = None
+        self.cur_question_id = None
+        self.cur_game = None
 
     def add_answer(self, game_name, answer_json):
+        print("answer for " + game_name)
         answer = json.loads(answer_json)
         finish = time.time()
         delt = finish - self.start
@@ -20,7 +30,7 @@ class Dbase(ApplicationSession):
             self.con.commit()
             return True
         else:
-            print(answer["question_id"], " vs",  self.cur_question_id)
+            print("Wrond question id", answer["question_id"], " vs",  self.cur_question_id)
             return False
 
     def add_user(self, user, rule_ids):
@@ -30,35 +40,6 @@ class Dbase(ApplicationSession):
         for rid in rule_ids:
             self.cur.execute("INSERT INTO user_rules VALUES(?)", (uid, rid))
         self.con.commit()
-
-    @inlineCallbacks
-    def onJoin(self, details):
-        self.con = sqlite3.connect(environ["database_name"])
-        self.cur = self.con.cursor()
-        self.cur.execute("PRAGMA foreign_keys = ON")
-        self.start = None
-        self.cur_question_id = None
-        self.cur_game = None
-        #if create_table:
-        #   self.create_tables()
-            # self.init_assistant()
-            # self.con.close()
-
-        def get_rules(self):
-            self.cur.execute("SELECT * FROM rules")
-
-        print("session attached")
-        try:
-            yield self.register(self.add_user, "com.admin.add_user")
-            yield self.register(self.add_question, "com.admin.add_question")
-            yield self.register(self.get_group, "com.admin.get_group")
-            yield self.register(self.create_tables, "com.admin.create_tables")
-            yield self.register(self.start_quiz, "com.assistant.start_quiz")
-        except Exception as e:
-            print(e)
-        else:
-            print("procedures registered")
-
 
     def create_tables(self):
         self.cur.execute('CREATE TABLE ad_types(id INTEGER PRIMARY KEY, type TEXT)')
@@ -114,7 +95,7 @@ class Dbase(ApplicationSession):
             rc = self.cur.fetchone()[0]
             tnum = None
             if rc > 1:
-                raise ValueError('more than on row with the tag')
+                raise ValueError('more than one row with the tag')
             if rc == 0:
                 self.cur.execute("INSERT INTO tags VALUES(NULL, ?)", (tag,))
                 self.cur.execute("SELECT last_insert_rowid()")
@@ -122,7 +103,7 @@ class Dbase(ApplicationSession):
             else:
                 self.cur.execute("SELECT id FROM tags WHERE name=?", (tag,))
                 tnum = self.cur.fetchone()[0]
-            print(tnum, qnum)
+            #print(tnum, qnum)
             try:
                 self.cur.execute("INSERT INTO tags_quests VALUES(?, ?)", (tnum, qnum,))
             except Exception as e:
@@ -152,6 +133,14 @@ class Dbase(ApplicationSession):
         return json.dumps(ret_res)
         #self.con.commit()
 
+    def get_user_id(self, user_name):
+        self.cur.execute("SELECT id FROM users WHERE name=?", (user_name,))
+        res = self.cur.fetchone()[0]
+        return res
+
+    #def get rooms_list
+    #def get_games_list
+
     @inlineCallbacks
     def start_quiz(self, game_name):
         full_game_name = "com."+game_name
@@ -160,19 +149,45 @@ class Dbase(ApplicationSession):
             self.cur_question_id = json.loads(quest_json)["id"]
             self.start = time.time()
             if self.cur_question_id == -1:
+                print(game_name, "finished")
                 self.cur_game.unsubscribe()
 
         yield self.register(functools.partial(self.add_answer, game_name=game_name), full_game_name+".add_answer")
         self.cur_game = yield self.subscribe(on_question_posted, full_game_name+".questions")
         print("subscribed")
 
+    @inlineCallbacks
+    def onJoin(self, details):
+
+        #if create_table:
+        #   self.create_tables()
+            # self.init_assistant()
+            # self.con.close()
+
+        def get_rules(self):
+            self.cur.execute("SELECT * FROM rules")
+
+        print("session attached")
+        try:
+            yield self.register(self.get_user_id, "com.assistant.get_user_id")
+            yield self.register(self.add_user, "com.admin.add_user")
+            yield self.register(self.add_question, "com.admin.add_question")
+            yield self.register(self.get_group, "com.admin.get_group")
+            yield self.register(self.create_tables, "com.admin.create_tables")
+            yield self.register(self.start_quiz, "com.assistant.start_quiz")
+        except Exception as e:
+            print(e)
+        else:
+            print("procedures registered")
+
+
 def main():
     import  sys
     if len(sys.argv) < 2:
-        raise ValueError("Irregular argument number, at least 2 expexcted")
+        raise ValueError("Irregular argument number, at least 2 expected")
     else:
         environ["database_name"] = sys.argv[1]
-    runner = ApplicationRunner(u"ws://127.0.0.1:8080/ws", u"realm1")
+    runner = ApplicationRunner(u"ws://127.0.0.1:8080/ws", u"realm1", {"database_name": "quiz.db"})
     runner.run(Dbase)
     #runner.run(Dbase(name='quiz.db', create_table=False))
     #base.create_tables()
