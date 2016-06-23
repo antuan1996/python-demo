@@ -12,43 +12,31 @@ from autobahn.asyncio.wamp import ApplicationSession, ApplicationRunner
 
 class Component(ApplicationSession):
 
+    async def on_question_posted(self, question_json):
+        qdict = json.loads(question_json)
+        if qdict["id"] == -1:
+            self.leave()
+        adict = {"question_id": qdict["id"], "user_id": self.id, "body": "hello"}
+        print("Sending normal question id:")
+        answ = await self.call("com."+self.game_name+".add_answer", answer_json=json.dumps(adict))
+        if answ:
+            print("right answer published")
+        else:
+            print("publishing  right answer error!")
+        print("Sending wrong question id:")
+        adict = {"question_id": 33, "user_id": self.id, "body": "hello"}
+        answ = await self.call("com."+self.game_name+".add_answer", answer_json=json.dumps(adict))
+        if answ:
+            print("wrong answer published!!!")
+        else:
+            print("publishing wrong answer error!")
+
     async def onJoin(self, details):
         self.id = await self.call("com.assistant.get_user_id", "user")
-        qdict = {"id": 1, "title": "RPC test", "description": "Первый вопрос, добавленный удалённо", "difficulty":10, "addon_id":None, "tag":"my"}
-        game_name = "first_game"
-        answ = await self.call("com.assistant.start_quiz", game_name)
-        print("quiz started")
-        await asyncio.sleep(3)
-        self.publish("com." + game_name + ".questions", json.dumps(qdict))
+        self.game_name = "first_game"
+        self.subscribe(self.on_question_posted, "com."+self.game_name+".questions")
+        self.call("com."+self.game_name+".join", json.dumps({"user_id": self.id, "event": "login"}))
 
-        print("question published")
-
-        await asyncio.sleep(5)
-        adict = {"question_id": 1, "user_id": self.id, "body": "hello"}
-
-        answ = await self.call("com.first_game.add_answer", answer_json=json.dumps(adict))
-        if answ:
-            print("answer published")
-        else:
-            print("publishing answer error!")
-        print("Sending wrong question id:")
-        adict = {"question_id": 3, "user_id": self.id, "body": "hello"}
-        answ = await self.call("com.first_game.add_answer", answer_json=json.dumps(adict))
-        if answ:
-            print("answer published")
-        else:
-            print("publishing answer error!")
-        print("Closing quiz")
-        qdict = {"id": -1}
-        self.publish("com.first_game.questions", json.dumps(qdict))
-        answ = await self.call("com.admin.get_group", "my")
-        print("my id", self.id)
-        answ = json.loads(answ)
-        for q in answ:
-            print(q)
-            #answ = await self.call("com.assistant.create_tables")
-            #print(answ)
-            #yield from self.subscribe(on_event, u'com.myapp.topic1')
 
     def join_to_quiz(self, request_json):
         reguest = json.loads(request_json)

@@ -32,6 +32,7 @@ class Component(ApplicationSession):
             # yield from self.subscribe(on_event, u'com.myapp.topic1')
             # self.publish("test", json.dumps(question))
             self.publish("com." + self.game_name + ".questions", json.dumps(question))
+            #await asyncio.sleep(2)
         print("questions published")
         await asyncio.sleep(10)
         print("Closing quiz")
@@ -39,13 +40,13 @@ class Component(ApplicationSession):
         self.publish("com.first_game.questions", json.dumps(qdict))
         self.leave()
 
-    def join_to_quiz(self, request_json):
+    async def join_to_quiz(self, request_json):
         reguest = json.loads(request_json)
         #TODO business logic
         if reguest["event"] == "login":
             self.counter += 1
         if self.counter >= 1:
-            self.quiz_body()
+            await self.quiz_body()
         #self.publish("com." + quiz_name + ".user_migration")
 
     def onDisconnect(self):
