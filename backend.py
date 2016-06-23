@@ -124,45 +124,51 @@ class Dbase(ApplicationSession):
         self.set_tag(qnum, tag)
 
     def get_group(self, tag_name: str):
-        self.cur.execute("SELECT questions.title, tags.name FROM questions JOIN tags_quests ON tags_quests.quest_id=questions.id JOIN tags ON tags_quests.tag_id=tags.id WHERE tags.name = ?",(tag_name,))
+        self.cur.execute("SELECT questions.id, questions.title, questions.description, questions.difficulty, questions.addon_id FROM questions JOIN tags_quests ON tags_quests.quest_id=questions.id JOIN tags ON tags_quests.tag_id=tags.id WHERE tags.name = ?",(tag_name,))
         fetch_res = self.cur.fetchall()
         ret_res = []
         for row in fetch_res:
-            qdict = {"title": row[0], "tag": row[1]}
+            qdict = {"id": row[0], "title": row[1], "description": row[2], "difficulty": row[3], "addon_id":row[4]}
             ret_res.append(qdict)
         return json.dumps(ret_res)
         #self.con.commit()
 
     def get_user_id(self, user_name):
+        print("gettind id")
         self.cur.execute("SELECT id FROM users WHERE name=?", (user_name,))
         res = self.cur.fetchone()[0]
         return res
 
-    #def get rooms_list
-    #def get_games_list
 
     @inlineCallbacks
     def start_quiz(self, game_name):
-        full_game_name = "com."+game_name
 
+        @inlineCallbacks
         def on_question_posted(quest_json):
+            print("Got question")
+            print(json.loads(quest_json))
             self.cur_question_id = json.loads(quest_json)["id"]
             self.start = time.time()
             if self.cur_question_id == -1:
                 print(game_name, "finished")
+                yield self.register(None, full_game_name + ".add_answer")
                 self.cur_game.unsubscribe()
 
-        yield self.register(functools.partial(self.add_answer, game_name=game_name), full_game_name+".add_answer")
+
+        full_game_name = "com."+game_name
         self.cur_game = yield self.subscribe(on_question_posted, full_game_name+".questions")
+
+        yield self.register(functools.partial(self.add_answer, game_name=game_name), full_game_name+".add_answer")
         print("subscribed")
+
 
     @inlineCallbacks
     def onJoin(self, details):
 
         #if create_table:
         #   self.create_tables()
-            # self.init_assistant()
-            # self.con.close()
+        # self.init_assistant()
+        # self.con.close()
 
         def get_rules(self):
             self.cur.execute("SELECT * FROM rules")

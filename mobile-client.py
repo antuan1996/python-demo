@@ -11,20 +11,19 @@ from autobahn.asyncio.wamp import ApplicationSession, ApplicationRunner
 
 
 class Component(ApplicationSession):
-    """
-    An application component that subscribes and receives events, and
-    stop after having received 5 events.
-    """
 
     async def onJoin(self, details):
         self.id = await self.call("com.assistant.get_user_id", "user")
-        qdict = {"id": 1, "title": "RPC test", "description":"Первый вопрос, добавленный удалённо", "difficulty":10, "addon_id":None, "tag":"my"}
-        answ = await self.call("com.assistant.start_quiz", "first_game")
+        qdict = {"id": 1, "title": "RPC test", "description": "Первый вопрос, добавленный удалённо", "difficulty":10, "addon_id":None, "tag":"my"}
+        game_name = "first_game"
+        answ = await self.call("com.assistant.start_quiz", game_name)
         print("quiz started")
-        self.publish("com.first_game.questions", json.dumps(qdict))
+        await asyncio.sleep(3)
+        self.publish("com." + game_name + ".questions", json.dumps(qdict))
+
         print("question published")
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
         adict = {"question_id": 1, "user_id": self.id, "body": "hello"}
 
         answ = await self.call("com.first_game.add_answer", answer_json=json.dumps(adict))
@@ -49,8 +48,12 @@ class Component(ApplicationSession):
             print(q)
             #answ = await self.call("com.assistant.create_tables")
             #print(answ)
-
             #yield from self.subscribe(on_event, u'com.myapp.topic1')
+
+    def join_to_quiz(self, request_json):
+        reguest = json.loads(request_json)
+        #TODO business logic
+        #self.publish("com." + quiz_name + ".user_migration")
 
     def onDisconnect(self):
         asyncio.get_event_loop().stop()
