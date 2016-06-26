@@ -11,11 +11,18 @@ from autobahn.asyncio.wamp import ApplicationSession, ApplicationRunner
 
 
 class Component(ApplicationSession):
+    def __init__(self, config):
+        super().__init__(config)
+        self.counter = 0
+        # TODO password via arguments
+        self.name = input("enter name:")
+        self.secret = input("enter secret:")
 
     async def on_question_posted(self, question_json):
         qdict = json.loads(question_json)
         if qdict["id"] == -1:
-            self.leave()
+            await self.leave()
+            return
         adict = {"question_id": qdict["id"], "user_id": self.id, "body": "hello"}
         print("Sending normal question id:")
         answ = await self.call("com."+self.game_name+".add_answer", answer_json=json.dumps(adict))
@@ -31,10 +38,23 @@ class Component(ApplicationSession):
         else:
             print("publishing wrong answer error!")
 
+    def onConnect(self):
+        print("Client session connected. Starting WAMP-Ticket authentication on realm '{}' as principal '{}' ..".format(
+            "realm1", self.name))
+        self.join("realm1", ["ticket"], self.name)
+
+    def onChallenge(self, challenge):
+        if challenge.method == "ticket":
+            print("WAMP-Ticket challenge received: {}".format(challenge))
+            return self.secret
+        else:
+            raise Exception("Invalid authmethod {}".format(challenge.method))
+
     async def onJoin(self, details):
-        self.id = await self.call("com.assistant.get_user_id", "user")
-        self.game_name = "first_game"
-        self.subscribe(self.on_question_posted, "com."+self.game_name+".questions")
+        print("joined")
+        self.id = await self.call("com.assistant.get_user_id", self.name)
+        self.game_name = input("Enter game name:")
+        self.subscribe(self.on_question_posted, u"com."+self.game_name+u".questions")
         self.call("com."+self.game_name+".join", json.dumps({"user_id": self.id, "event": "login"}))
 
 
@@ -42,6 +62,7 @@ class Component(ApplicationSession):
         reguest = json.loads(request_json)
         #TODO business logic
         #self.publish("com." + quiz_name + ".user_migration")
+
 
     def onDisconnect(self):
         asyncio.get_event_loop().stop()

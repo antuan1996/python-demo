@@ -14,12 +14,27 @@ class Component(ApplicationSession):
     def __init__(self, config):
         super().__init__(config)
         self.counter = 0
+        #TODO password via arguments
+        self.name = "frontend"
+        self.secret = "971701"
+
+    def onConnect(self):
+        print("Client session connected. Starting WAMP-Ticket authentication on realm '{}' as principal '{}' ..".format(
+            "realm1", self.name))
+        self.join("realm1", ["ticket"], self.name)
+
+    def onChallenge(self, challenge):
+        if challenge.method == "ticket":
+            print("WAMP-Ticket challenge received: {}".format(challenge))
+            return self.secret
+        else:
+            raise Exception("Invalid authmethod {}".format(challenge.method))
 
     async def onJoin(self, details):
         #qdict = {"id": 1, "title": "RPC test", "description": "Первый вопрос, добавленный удалённо", "difficulty":10, "addon_id":None, "tag":"my"}
-        self.game_name = "first_game"
+        self.game_name = input("Enter game name:")
         self.register(self.join_to_quiz, "com."+self.game_name+".join")
-        await self.call("com.assistant.start_quiz", self.game_name)
+        await self.call("com.assistant.start_quiz", game_name=self.game_name, participants_ammount=3)
         print("quiz started")
 
     async def quiz_body(self):
@@ -30,14 +45,14 @@ class Component(ApplicationSession):
             # answ = await self.call("com.assistant.create_tables")
             # print(answ)
             # yield from self.subscribe(on_event, u'com.myapp.topic1')
-            # self.publish("test", json.dumps(question))
+            #self.publish("test", json.dumps(question))
             self.publish("com." + self.game_name + ".questions", json.dumps(question))
-            #await asyncio.sleep(2)
+            await asyncio.sleep(0.1)
         print("questions published")
         await asyncio.sleep(10)
         print("Closing quiz")
         qdict = {"id": -1}
-        self.publish("com.first_game.questions", json.dumps(qdict))
+        self.publish("com." + self.game_name + ".questions", json.dumps(qdict))
         self.leave()
 
     async def join_to_quiz(self, request_json):

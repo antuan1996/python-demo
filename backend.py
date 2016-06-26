@@ -1,22 +1,16 @@
+import functools
 import json
 import sqlite3
 import time
-import functools
 from os import environ
-from twisted.internet.defer import inlineCallbacks
+import string
 from autobahn.twisted.wamp import ApplicationSession, ApplicationRunner
+from autobahn.wamp.exception import ApplicationError
+from twisted.internet.defer import inlineCallbacks
+from xkcdpass import xkcd_password as xp
 
 
 class Dbase(ApplicationSession):
-    def __init__(self, config):
-        super().__init__(config)
-        print(self.config.extra["database_name"])
-        self.con = sqlite3.connect(environ["database_name"])
-        self.cur = self.con.cursor()
-        self.cur.execute("PRAGMA foreign_keys = ON")
-        self.start = None
-        self.cur_question_id = None
-        self.cur_game = None
 
     def add_answer(self, game_name, answer_json):
         print("answer for " + game_name)
@@ -24,7 +18,7 @@ class Dbase(ApplicationSession):
         finish = time.time()
         delt = finish - self.start
         answ_tuple = (answer["question_id"], answer["user_id"], delt, answer["body"])
-        if answer["question_id"] == self.cur_question_id:
+        if answer["question_id"] == self.cur_question_id or answer["question_id"] == self.prev_question_id:
             self.cur.execute("INSERT INTO answers VALUES(NULL, ?, ?, ?, ?)", answ_tuple)
             print("saved")
             self.con.commit()
@@ -33,15 +27,8 @@ class Dbase(ApplicationSession):
             print("Wrond question id", answer["question_id"], " vs",  self.cur_question_id)
             return False
 
-    def add_user(self, user, rule_ids):
-        self.con.commit("INSERT INTO users VALUES(NULL, ?, ?)", user)
-        self.cur.execute("SELECT last_insert_rowid()")
-        uid = self.cur.fetchone()[0]
-        for rid in rule_ids:
-            self.cur.execute("INSERT INTO user_rules VALUES(?)", (uid, rid))
-        self.con.commit()
-
     def create_tables(self):
+        print("creating tables")
         self.cur.execute('CREATE TABLE ad_types(id INTEGER PRIMARY KEY, type TEXT)')
         self.cur.execute('CREATE TABLE addons(id INTEGER PRIMARY KEY, type INT REFERENCES ad_types(id), url TEXT)')
         self.cur.execute("""CREATE TABLE questions(
@@ -62,24 +49,47 @@ class Dbase(ApplicationSession):
                             callee BIT,
                             public BIT,
                             subscribe BIT)""")
+        self.cur.execute("""CREATE TABLE games(
+                            id INTEGER PRIMARY KEY,
+                            name TEXT UNIQUE,
+                            beginning_time TIMESTAMP)""")
+        self.cur.execute("""CREATE TABLE roles(
+                            id INTEGER PRIMARY KEY,
+                            name TEXT UNIQUE)""")
         self.cur.execute("""CREATE TABLE users(
                             id INTEGER PRIMARY KEY,
                             name TEXT UNIQUE,
-                            secret TEXT)""")
-        self.cur.execute("""CREATE TABLE user_rules(
-                            user_id INTEGER REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+                            secret TEXT,
+                            role_id INT REFERENCES roles(id) ON UPDATE CASCADE ON DELETE RESTRICT)""")
+        self.cur.execute("""CREATE TABLE user_game(
+                            user_id INT UNIQUE REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+                            game_id INT REFERENCES games(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+                            PRIMARY KEY(user_id, game_id))""")
+        self.cur.execute("""CREATE TABLE roles_rules(
+                            role_id INTEGER REFERENCES roles(id) ON UPDATE CASCADE ON DELETE RESTRICT,
                             rule_id INTEGER REFERENCES rules(id) ON UPDATE CASCADE ON DELETE RESTRICT)""")
         self.cur.execute("""CREATE TABLE answers(
                             id INTEGER PRIMARY KEY,
                             quest_id INTEGER REFERENCES questions(id) ON UPDATE CASCADE ON DELETE RESTRICT,
                             user_id INTEGER REFERENCES  users(id),
-                            seconds INT CHECK( seconds>0 AND seconds<=1000),
+                            seconds FLOAT CHECK( seconds>0 AND seconds<=1000),
                             body TEXT)""")
+        self.con.commit()
+
+        self.cur.execute("""INSERT INTO roles VALUES(0, "root" )""")
+        self.cur.execute("""INSERT INTO roles VALUES(1, "backend" )""")
+        self.cur.execute("""INSERT INTO roles VALUES(2, "web-client" )""")
+        self.cur.execute("""INSERT INTO roles VALUES(3, "mobile-client" )""")
         self.con.commit()
 
         self.cur.execute("INSERT INTO ad_types VALUES(NULL, 'PICTURE')")
         self.cur.execute("INSERT INTO ad_types VALUES(NULL, 'AUDIO')")
         self.cur.execute("INSERT INTO ad_types VALUES(NULL, 'VIDEO')")
+        self.con.commit()
+
+        self.cur.execute("INSERT INTO users VALUES(NULL, 'database', '55555', 1)")
+        self.cur.execute("INSERT INTO users VALUES(NULL, 'frontend', '971701', 2)")
+        self.cur.execute("INSERT INTO users VALUES(NULL, 'mobile', '933421', 3)")
         self.con.commit()
 
         self.cur.execute("INSERT INTO questions VALUES(NULL, 'Тестовый вопрос 1', 'Просто введи любой ответ', 1, NULL)")
@@ -91,7 +101,7 @@ class Dbase(ApplicationSession):
 
     def set_tag(self, qnum, tag):
         if tag is not None:
-            self.cur.execute("SELECT COUNT(id) FROM tags WHERE name=?",(tag,))
+            self.cur.execute("SELECT COUNT(id) FROM tags WHERE name=?", (tag,))
             rc = self.cur.fetchone()[0]
             tnum = None
             if rc > 1:
@@ -134,33 +144,85 @@ class Dbase(ApplicationSession):
         #self.con.commit()
 
     def get_user_id(self, user_name):
-        print("gettind id")
+        print("gettind id", user_name)
         self.cur.execute("SELECT id FROM users WHERE name=?", (user_name,))
-        res = self.cur.fetchone()[0]
-        return res
+        res = self.cur.fetchone()
+        if res is not None:
+            return res[0]
+        else:
+            raise ApplicationError("com.wrong_user_id", "wrong user name")
 
+    #TODO database cleaning
 
     @inlineCallbacks
-    def start_quiz(self, game_name):
+    def start_quiz(self, game_name, participants_ammount):
+        participants_list = []
 
         @inlineCallbacks
         def on_question_posted(quest_json):
             print("Got question")
             print(json.loads(quest_json))
+            self.prev_question_id = self.cur_question_id
             self.cur_question_id = json.loads(quest_json)["id"]
             self.start = time.time()
             if self.cur_question_id == -1:
                 print(game_name, "finished")
                 yield self.register(None, full_game_name + ".add_answer")
+                print("disabling participants")
+                for id in participants_list:
+                    self.cur.execute("UPDATE users SET role_id=NULL WHERE id=?", (id, ))
+                self.con.commit()
+
                 self.cur_game.unsubscribe()
 
-
+        self.cur.execute("SELECT id from roles WHERE name=?", ("mobile-client",))
+        user_role_id = self.cur.fetchone()[0]
+        self.cur.execute("INSERT INTO games VALUES(NULL, ?, NULL)", (game_name, ))
+        self.cur.execute("SELECT last_insert_rowid()")
+        self.cur_game_id = self.cur.fetchone()[0]
         full_game_name = "com."+game_name
+
+        wordfile = xp.locate_wordfile()
+        mywords = xp.generate_wordlist(wordfile=wordfile, min_length=5, max_length=5)
+
+        for i in range(participants_ammount):
+            user_name = game_name + str(i)
+            secret = xp.generate_xkcdpassword(mywords, acrostic="hi", delimiter=":")
+            secret = string.capwords(secret)
+            self.cur.execute("INSERT INTO users VALUES(NULL, ?, ?, ?)", (user_name, secret, user_role_id))
+            self.cur.execute("SELECT last_insert_rowid()")
+            cur_user_id = self.cur.fetchone()[0]
+            participants_list.append(cur_user_id)
+            self.cur.execute("INSERT INTO user_game VALUES(?, ?)", (cur_user_id, self.cur_game_id))
+        self.con.commit()
         self.cur_game = yield self.subscribe(on_question_posted, full_game_name+".questions")
 
         yield self.register(functools.partial(self.add_answer, game_name=game_name), full_game_name+".add_answer")
         print("subscribed")
 
+    def onConnect(self):
+        self.con = sqlite3.connect("quiz.db")
+        #TODO dbase name from arguments
+        self.cur = self.con.cursor()
+        self.cur.execute("PRAGMA foreign_keys = ON")
+        if "create_table" in self.config.extra:
+            self.create_tables()
+        self.start = None
+        self.cur_question_id = None
+        self.prev_question_id = None
+        self.cur_game = None
+        self.name = "database"
+        self.secret = "55555"
+        print("Client session connected. Starting WAMP-Ticket authentication on realm '{}' as principal '{}' ..".format(
+            "realm1", self.name))
+        self.join("realm1", ["ticket"], self.name)
+
+    def onChallenge(self, challenge):
+        if challenge.method == "ticket":
+            print("WAMP-Ticket challenge received: {}".format(challenge))
+            return self.secret
+        else:
+            raise Exception("Invalid authmethod {}".format(challenge.method))
 
     @inlineCallbacks
     def onJoin(self, details):
@@ -176,7 +238,7 @@ class Dbase(ApplicationSession):
         print("session attached")
         try:
             yield self.register(self.get_user_id, "com.assistant.get_user_id")
-            yield self.register(self.add_user, "com.admin.add_user")
+            #yield self.register(self.add_user, "com.admin.add_user")
             yield self.register(self.add_question, "com.admin.add_question")
             yield self.register(self.get_group, "com.admin.get_group")
             yield self.register(self.create_tables, "com.admin.create_tables")
@@ -193,6 +255,7 @@ def main():
         raise ValueError("Irregular argument number, at least 2 expected")
     else:
         environ["database_name"] = sys.argv[1]
+    #runner = ApplicationRunner(u"ws://127.0.0.1:8080/ws", u"realm1", {"database_name": "quiz.db", "create_table": None})
     runner = ApplicationRunner(u"ws://127.0.0.1:8080/ws", u"realm1", {"database_name": "quiz.db"})
     runner.run(Dbase)
     #runner.run(Dbase(name='quiz.db', create_table=False))
