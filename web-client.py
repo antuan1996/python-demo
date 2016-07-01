@@ -1,4 +1,9 @@
-import json
+import json, jsonpickle
+
+import requests
+import umsgpack
+from PIL import Image
+from requests.auth import HTTPBasicAuth
 
 try:
     import asyncio
@@ -33,19 +38,34 @@ class Component(ApplicationSession):
     async def onJoin(self, details):
         #qdict = {"id": 1, "title": "RPC test", "description": "Первый вопрос, добавленный удалённо", "difficulty":10, "addon_id":None, "tag":"my"}
         self.game_name = input("Enter game name:")
+        n = int(input("Enter participants ammount:"))
+        participants = []
+        for i in range(n):
+            user_name = input("Enter user name")
+            participants.append(user_name)
         self.register(self.join_to_quiz, "com."+self.game_name+".join")
-        await self.call("com.assistant.start_quiz", game_name=self.game_name, participants_ammount=3)
+        self.register(self.open_image, "com.image")
+
+        await self.call("com.assistant.start_quiz", game_name=self.game_name, participants=participants)
         print("quiz started")
 
     async def quiz_body(self):
-        answ = await self.call("com.admin.get_group", "my")
-        answ = json.loads(answ)
-        for question in answ:
+        data = await self.call("com.admin.get_group", "my")
+        data = json.loads(data)
+        questions = data[0]
+        addons = data[1]
+        print(addons)
+        for question in questions:
             print(question)
-            # answ = await self.call("com.assistant.create_tables")
-            # print(answ)
-            # yield from self.subscribe(on_event, u'com.myapp.topic1')
-            #self.publish("test", json.dumps(question))
+            curr_addon_id = str(question.pop("addon_id", None))
+            if curr_addon_id is not None:
+                addon_name = addons[curr_addon_id]
+                request = requests.get("http://localhost:8801/"+addon_name,
+                                       auth=HTTPBasicAuth('admin', 'aaa'))
+                f = open(addon_name, "wb")
+                f.write(request.content)
+                f.close()
+                print("downloaded", addon_name)
             self.publish("com." + self.game_name + ".questions", json.dumps(question))
             await asyncio.sleep(0.1)
         print("questions published")
@@ -53,7 +73,6 @@ class Component(ApplicationSession):
         print("Closing quiz")
         qdict = {"id": -1}
         self.publish("com." + self.game_name + ".questions", json.dumps(qdict))
-        self.leave()
 
     async def join_to_quiz(self, request_json):
         reguest = json.loads(request_json)
@@ -62,8 +81,15 @@ class Component(ApplicationSession):
             self.counter += 1
         if self.counter >= 1:
             await self.quiz_body()
+            self.leave()
         #self.publish("com." + quiz_name + ".user_migration")
 
+    def open_image(self, data):
+        ofile = open("python-mycopy.png","wb")
+        ofile.write(data)
+        ofile.close()
+        #im = jsonpickle.decode(msg)
+        #im.show()
     def onDisconnect(self):
         asyncio.get_event_loop().stop()
 

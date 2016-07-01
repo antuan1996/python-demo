@@ -64,6 +64,8 @@ class AuthenticatorSession(ApplicationSession):
         self.con = sqlite3.connect(self.dbase_name)
         self.cur = self.con.cursor()
         self.cur.execute("PRAGMA foreign_keys = ON")
+        self.cur.execute("SELECT id from roles WHERE name=?", ("mobile-client",))
+        self.user_role_id = self.cur.fetchone()[0]
 
         def authenticate(realm, authid, details):
             given_ticket = details['ticket']
@@ -71,18 +73,30 @@ class AuthenticatorSession(ApplicationSession):
                 realm, authid, given_ticket))
             #pprint(details)
             try:
-                self.cur.execute("SELECT secret, role_id FROM users WHERE name=?", (authid, ))
+                self.cur.execute("SELECT secret, role_id, id FROM users WHERE name=?", (authid, ))
             except Exception as e:
                 print(e)
                 #raise(e)
-                raise ApplicationError("com.example.no_such_user", "could not authenticate session - no such principal {}".format(authid))
+                raise ApplicationError("com.errors.no_such_user", """could not authenticate session"
+                                        - no such principal {}""".format(authid))
 
             dbase_ticket = self.cur.fetchone()
             if dbase_ticket is None:
-                raise ApplicationError("com.example.invalid_ticket", "could not authenticate session - invalid ticket '{}' for principal {}".format(given_ticket, authid))
+                raise ApplicationError("com.errors.invalid_ticket", """could not authenticate session
+                                        - invalid ticket '{}' for principal {}"""
+                                       .format(given_ticket, authid))
             if dbase_ticket[1] is None:
                 raise ApplicationError("com.errors.disabled_account", "account {} is disabled, please enter other name".format(authid))
-            if given_ticket == dbase_ticket[0]:
+            if given_ticket != dbase_ticket[0]:
+                raise ApplicationError("com.errors.wrong_secret", "Incorrect password")
+
+            if dbase_ticket[1] == self.user_role_id:
+                self.cur.execute("SELECT game_id FROM user_game WHERE user_id=?", (dbase_ticket[2], ))
+                game_id = self.cur.fetchone()[0]
+                self.cur.execute("SELECT name FROM games WHERE id=?", (game_id, ))
+                game_name = self.cur.fetchone()[0]
+                return {u"role": u"root", u"extra": {u"game_name": game_name}}
+            else:
                 return {u"role": u"root"}
 
         try:

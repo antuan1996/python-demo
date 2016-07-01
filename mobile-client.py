@@ -1,5 +1,9 @@
 import json
 
+import requests
+from requests.auth import HTTPBasicAuth
+from PIL import Image
+
 try:
     import asyncio
 except ImportError:
@@ -21,7 +25,7 @@ class Component(ApplicationSession):
     async def on_question_posted(self, question_json):
         qdict = json.loads(question_json)
         if qdict["id"] == -1:
-            await self.leave()
+            await self.game.unsubscribe()
             return
         adict = {"question_id": qdict["id"], "user_id": self.id, "body": "hello"}
         print("Sending normal question id:")
@@ -52,14 +56,15 @@ class Component(ApplicationSession):
 
     async def onJoin(self, details):
         print("joined")
+        print(details)
         self.id = await self.call("com.assistant.get_user_id", self.name)
-        self.game_name = input("Enter game name:")
-        self.subscribe(self.on_question_posted, u"com."+self.game_name+u".questions")
-        self.call("com."+self.game_name+".join", json.dumps({"user_id": self.id, "event": "login"}))
-
+        self.game_name = details.authextra["game_name"]
+        self.game = await self.subscribe(self.on_question_posted, u"com."+self.game_name+u".questions")
+        await self.call("com."+self.game_name+".join", json.dumps({"user_id": self.id, "event": "login"}))
+        self.leave()
 
     def join_to_quiz(self, request_json):
-        reguest = json.loads(request_json)
+        request = json.loads(request_json)
         #TODO business logic
         #self.publish("com." + quiz_name + ".user_migration")
 
@@ -69,8 +74,8 @@ class Component(ApplicationSession):
 
 
 if __name__ == '__main__':
+    from io import BytesIO
     runner = ApplicationRunner(
-        environ.get("AUTOBAHN_DEMO_ROUTER", u"ws://127.0.0.1:8080/ws"),
-        u"realm1",
-    )
+       environ.get("AUTOBAHN_DEMO_ROUTER", u"ws://127.0.0.1:8080/ws"),
+        u"realm1")
     runner.run(Component)

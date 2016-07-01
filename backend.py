@@ -1,12 +1,13 @@
 import functools
-import json
+import json, jsonpickle
 import sqlite3
 import time
 from os import environ
 import string
-from autobahn.twisted.wamp import ApplicationSession, ApplicationRunner
+import msgpack
+from PIL import Image
+from autobahn.asyncio.wamp import ApplicationSession, ApplicationRunner
 from autobahn.wamp.exception import ApplicationError
-from twisted.internet.defer import inlineCallbacks
 from xkcdpass import xkcd_password as xp
 
 
@@ -134,12 +135,22 @@ class Dbase(ApplicationSession):
         self.set_tag(qnum, tag)
 
     def get_group(self, tag_name: str):
-        self.cur.execute("SELECT questions.id, questions.title, questions.description, questions.difficulty, questions.addon_id FROM questions JOIN tags_quests ON tags_quests.quest_id=questions.id JOIN tags ON tags_quests.tag_id=tags.id WHERE tags.name = ?",(tag_name,))
+        self.cur.execute("""SELECT questions.id, questions.title, questions.description,
+                            questions.difficulty, questions.addon_id, addons.url
+                            FROM questions JOIN tags_quests ON tags_quests.quest_id=questions.id
+                            JOIN tags ON tags_quests.tag_id=tags.id
+                            LEFT JOIN addons ON questions.addon_id=addons.id WHERE tags.name = ?""", (tag_name,))
         fetch_res = self.cur.fetchall()
         ret_res = []
+        questions_array = []
+        addon_dict = {}
         for row in fetch_res:
-            qdict = {"id": row[0], "title": row[1], "description": row[2], "difficulty": row[3], "addon_id":row[4]}
-            ret_res.append(qdict)
+            qdict = {"id": row[0], "title": row[1], "description": row[2], "difficulty": row[3], "addon_id": row[4]}
+            if row[4] is not None and row[4] not in addon_dict:
+                addon_dict[row[4]] = row[5]
+            questions_array.append(qdict)
+        ret_res.append(questions_array)
+        ret_res.append(addon_dict)
         return json.dumps(ret_res)
         #self.con.commit()
 
@@ -154,12 +165,10 @@ class Dbase(ApplicationSession):
 
     #TODO database cleaning
 
-    @inlineCallbacks
-    def start_quiz(self, game_name, participants_ammount):
+    async def start_quiz(self, game_name, participants):
         participants_list = []
 
-        @inlineCallbacks
-        def on_question_posted(quest_json):
+        async def on_question_posted(quest_json):
             print("Got question")
             print(json.loads(quest_json))
             self.prev_question_id = self.cur_question_id
@@ -167,12 +176,11 @@ class Dbase(ApplicationSession):
             self.start = time.time()
             if self.cur_question_id == -1:
                 print(game_name, "finished")
-                yield self.register(None, full_game_name + ".add_answer")
+                await self.register(None, full_game_name + ".add_answer")
                 print("disabling participants")
-                for id in participants_list:
-                    self.cur.execute("UPDATE users SET role_id=NULL WHERE id=?", (id, ))
+                for user_id in participants_list:
+                    self.cur.execute("UPDATE users SET role_id=NULL WHERE id=?", (user_id, ))
                 self.con.commit()
-
                 self.cur_game.unsubscribe()
 
         self.cur.execute("SELECT id from roles WHERE name=?", ("mobile-client",))
@@ -185,19 +193,18 @@ class Dbase(ApplicationSession):
         wordfile = xp.locate_wordfile()
         mywords = xp.generate_wordlist(wordfile=wordfile, min_length=5, max_length=5)
 
-        for i in range(participants_ammount):
-            user_name = game_name + str(i)
+        for user_name in participants:
             secret = xp.generate_xkcdpassword(mywords, acrostic="hi", delimiter=":")
-            secret = string.capwords(secret)
+            #secret = string.capwords(secret)
             self.cur.execute("INSERT INTO users VALUES(NULL, ?, ?, ?)", (user_name, secret, user_role_id))
             self.cur.execute("SELECT last_insert_rowid()")
             cur_user_id = self.cur.fetchone()[0]
             participants_list.append(cur_user_id)
             self.cur.execute("INSERT INTO user_game VALUES(?, ?)", (cur_user_id, self.cur_game_id))
         self.con.commit()
-        self.cur_game = yield self.subscribe(on_question_posted, full_game_name+".questions")
+        self.cur_game = await self.subscribe(on_question_posted, full_game_name+".questions")
 
-        yield self.register(functools.partial(self.add_answer, game_name=game_name), full_game_name+".add_answer")
+        await self.register(functools.partial(self.add_answer, game_name=game_name), full_game_name+".add_answer")
         print("subscribed")
 
     def onConnect(self):
@@ -224,9 +231,7 @@ class Dbase(ApplicationSession):
         else:
             raise Exception("Invalid authmethod {}".format(challenge.method))
 
-    @inlineCallbacks
-    def onJoin(self, details):
-
+    async def onJoin(self, details):
         #if create_table:
         #   self.create_tables()
         # self.init_assistant()
@@ -237,12 +242,12 @@ class Dbase(ApplicationSession):
 
         print("session attached")
         try:
-            yield self.register(self.get_user_id, "com.assistant.get_user_id")
+            await self.register(self.get_user_id, "com.assistant.get_user_id")
             #yield self.register(self.add_user, "com.admin.add_user")
-            yield self.register(self.add_question, "com.admin.add_question")
-            yield self.register(self.get_group, "com.admin.get_group")
-            yield self.register(self.create_tables, "com.admin.create_tables")
-            yield self.register(self.start_quiz, "com.assistant.start_quiz")
+            await self.register(self.add_question, "com.admin.add_question")
+            await self.register(self.get_group, "com.admin.get_group")
+            await self.register(self.create_tables, "com.admin.create_tables")
+            await self.register(self.start_quiz, "com.assistant.start_quiz")
         except Exception as e:
             print(e)
         else:
