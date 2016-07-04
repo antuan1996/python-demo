@@ -28,7 +28,8 @@
 
 import os
 from pprint import pprint
-import sqlite3
+#import sqlite3
+import psycopg2
 import six
 
 from twisted.internet.defer import inlineCallbacks
@@ -36,35 +37,14 @@ from twisted.internet.defer import inlineCallbacks
 from autobahn.twisted.wamp import ApplicationSession
 from autobahn.wamp.exception import ApplicationError
 
-MYTICKET = os.environ.get('MYTICKET', None)
-if MYTICKET and six.PY2:
-   MYTICKET = MYTICKET.decode('utf8')
-
-# our principal "database"
-PRINCIPALS_DB = {
-   u"joe": {
-      "ticket": "secret!!!",
-      "role": u"root"
-   },
-   "client1": {
-      "ticket": "123sekret",
-      "role": u"root"
-   },
-   "client2": {
-      "ticket": MYTICKET,
-      "role": u"root"
-   }
-}
-
 
 class AuthenticatorSession(ApplicationSession):
+    
     @inlineCallbacks
     def onJoin(self, details):
-        self.dbase_name = "../quiz.db"
-        self.con = sqlite3.connect(self.dbase_name)
+        self.con = psycopg2.connect(database="postgres", user="postgres", password="postgres")
         self.cur = self.con.cursor()
-        self.cur.execute("PRAGMA foreign_keys = ON")
-        self.cur.execute("SELECT id from roles WHERE name=?", ("mobile-client",))
+        self.cur.execute("SELECT id from roles WHERE name=%s", ("mobile-client",))
         self.user_role_id = self.cur.fetchone()[0]
 
         def authenticate(realm, authid, details):
@@ -72,28 +52,19 @@ class AuthenticatorSession(ApplicationSession):
             print("WAMP-Ticket dynamic authenticator invoked: realm='{}', authid='{}', ticket='{}'".format(
                 realm, authid, given_ticket))
             #pprint(details)
-            try:
-                self.cur.execute("SELECT secret, role_id, id FROM users WHERE name=?", (authid, ))
-            except Exception as e:
-                print(e)
-                #raise(e)
-                raise ApplicationError("com.errors.no_such_user", """could not authenticate session"
-                                        - no such principal {}""".format(authid))
-
+            self.cur.execute("SELECT secret, role_id, id FROM users WHERE name=%s", (authid, ))
             dbase_ticket = self.cur.fetchone()
             if dbase_ticket is None:
-                raise ApplicationError("com.errors.invalid_ticket", """could not authenticate session
-                                        - invalid ticket '{}' for principal {}"""
-                                       .format(given_ticket, authid))
+                raise ApplicationError("com.errors.no_such_user", """could not authenticate session- no such principal {}""".format(authid))
             if dbase_ticket[1] is None:
                 raise ApplicationError("com.errors.disabled_account", "account {} is disabled, please enter other name".format(authid))
             if given_ticket != dbase_ticket[0]:
                 raise ApplicationError("com.errors.wrong_secret", "Incorrect password")
 
             if dbase_ticket[1] == self.user_role_id:
-                self.cur.execute("SELECT game_id FROM user_game WHERE user_id=?", (dbase_ticket[2], ))
+                self.cur.execute("SELECT game_id FROM user_game WHERE user_id=%s", (dbase_ticket[2], ))
                 game_id = self.cur.fetchone()[0]
-                self.cur.execute("SELECT name FROM games WHERE id=?", (game_id, ))
+                self.cur.execute("SELECT name FROM tags WHERE id=%s", (game_id, ))
                 game_name = self.cur.fetchone()[0]
                 return {u"role": u"root", u"extra": {u"game_name": game_name}}
             else:

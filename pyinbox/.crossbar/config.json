@@ -66,12 +66,17 @@
                         "/": {
                             "type": "static",
                             "directory": "../web"
-                        },
+                            },
+                      "files": {
+                           "type": "reverseproxy",
+                            "port": 8801,
+                            "host": "localhost",
+                            "path": ""
+                                },
                         "ws": {
                             "type": "websocket",
                             "serializers": [
-                                "json"
-                            ],
+                                "json"],
                             "auth": {
                                 "ticket": {
                                     "type": "dynamic",

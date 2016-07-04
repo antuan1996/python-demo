@@ -26,17 +26,18 @@ class Component(ApplicationSession):
         qdict = json.loads(question_json)
         if qdict["id"] == -1:
             await self.game.unsubscribe()
+            self.leave()
             return
-        adict = {"question_id": qdict["id"], "user_id": self.id, "body": "hello"}
+        adict = {"question_id": qdict["id"], "user_id": self.id, "body": "hello", "game_name": self.game_name}
         print("Sending normal question id:")
-        answ = await self.call("com."+self.game_name+".add_answer", answer_json=json.dumps(adict))
+        answ = await self.call("com.assistant.add_answer", adict)
         if answ:
             print("right answer published")
         else:
             print("publishing  right answer error!")
         print("Sending wrong question id:")
-        adict = {"question_id": 33, "user_id": self.id, "body": "hello"}
-        answ = await self.call("com."+self.game_name+".add_answer", answer_json=json.dumps(adict))
+        adict = {"question_id": 33, "user_id": self.id, "body": "hello", "game_name": self.game_name}
+        answ = await self.call("com.assistant.add_answer", adict)
         if answ:
             print("wrong answer published!!!")
         else:
@@ -60,8 +61,8 @@ class Component(ApplicationSession):
         self.id = await self.call("com.assistant.get_user_id", self.name)
         self.game_name = details.authextra["game_name"]
         self.game = await self.subscribe(self.on_question_posted, u"com."+self.game_name+u".questions")
-        await self.call("com."+self.game_name+".join", json.dumps({"user_id": self.id, "event": "login"}))
-        self.leave()
+        self.publish("com."+self.game_name+".join", json.dumps({"user_id": self.id, "event": "login"}))
+        #self.leave()
 
     def join_to_quiz(self, request_json):
         request = json.loads(request_json)
