@@ -33,6 +33,8 @@ class Dbase(ApplicationSession):
 
     #TODO add game_id in answers table
     async def add_answer(self, answer):
+        con = await self.pool.acquire()
+        cur = await con.cursor()
         game_name = answer["game_name"]
         print("answer for " + game_name)
         finish = time.time()
@@ -40,15 +42,19 @@ class Dbase(ApplicationSession):
         answ_tuple = (answer["question_id"], answer["user_id"], delt, answer["body"])
         if( answer["question_id"] == self.games[game_name].cur_question_id
             or answer["question_id"] == self.games[game_name].prev_question_id):
-            await self.cur.execute("INSERT INTO answers(quest_id, user_id, seconds, body) VALUES(%s, %s, %s, %s)", answ_tuple)
+            await cur.execute("INSERT INTO answers(quest_id, user_id, seconds, body) VALUES(%s, %s, %s, %s)", answ_tuple)
             print("saved")
+            print(self.pool.freesize)
+            await self.pool.release(con)
             return True
         else:
             print("Wrond question id", answer["question_id"], " vs",  self.cur_question_id)
             return False
 
     async def on_question_posted(self, game_name, quest_json):
-        print("Got question")
+        print("Got question for", game_name)
+        con = await self.pool.acquire()
+        cur = await con.cursor()
         print(json.loads(quest_json))
         full_game_name = "com." + game_name
         self.games[game_name].prev_question_id = self.games[game_name].cur_question_id
@@ -59,21 +65,26 @@ class Dbase(ApplicationSession):
             print("disabling participants")
             for user_id in self.games[game_name].participants_list:
                 print("disabling user with id=", user_id)
-                await self.cur.execute("UPDATE users SET role_id=NULL WHERE id=%s", (user_id,))
+                await cur.execute("UPDATE users SET role_id=NULL WHERE id=%s", (user_id,))
             await self.games[game_name].leave()
+        print(self.pool.freesize)
+        await self.pool.release(con)
 
     async def start_quiz(self, data):
         print("Quiz registration was called")
         game_name = data["game_name"]
         participants = data["players"]
         participants_list = []
-        await self.cur.execute("SELECT id from roles WHERE name=%s", ("mobile-client",))
-        user_role_id = await self.cur.fetchone()
+        con = await self.pool.acquire()
+        cur = await con.cursor()
+
+        await cur.execute("SELECT id from roles WHERE name=%s", ("mobile-client",))
+        user_role_id = await cur.fetchone()
         user_role_id = user_role_id[0]
         game_id = await self.get_tag_id(game_name)
         time_stmp = datetime.datetime.now()
         try:
-            await self.cur.execute("INSERT INTO games VALUES(%s, %s)", (game_id, time_stmp))
+            await cur.execute("INSERT INTO games VALUES(%s, %s)", (game_id, time_stmp))
         except Exception:
             print("Warning! Game was initiated before")
         finally:
@@ -83,61 +94,65 @@ class Dbase(ApplicationSession):
             for user_name in participants:
                 secret = xp.generate_xkcdpassword(mywords, acrostic="hi", delimiter=":")
                 # secret = string.capwords(secret)
-                await self.cur.execute("INSERT INTO users(name, secret, role_id) VALUES(%s, %s, %s) RETURNING id",
-                                        (user_name, secret, user_role_id))
+                await cur.execute("INSERT INTO users(name, secret, role_id) VALUES(%s, %s, %s) RETURNING id",
+                                       (user_name, secret, user_role_id))
                 # self.cur.execute("SELECT last_insert_rowid()")
-                cur_user_id = await self.cur.fetchone()
+                cur_user_id = await cur.fetchone()
                 cur_user_id = cur_user_id[0]
                 participants_list.append(cur_user_id)
-                await self.cur.execute("INSERT INTO user_game VALUES(%s, %s)", (cur_user_id, game_id))
+                await cur.execute("INSERT INTO user_game VALUES(%s, %s)", (cur_user_id, game_id))
             cur_game = await self.subscribe(lambda question: self.on_question_posted(game_name, question),
                                             full_game_name + ".questions")
             self.games[game_name] = Dbase.Game(cur_game, game_id)
             self.games[game_name].participants_list = participants_list
             print("subscribed")
+            print(self.pool.freesize)
+            await self.pool.release(con)
             return True
 
     async def create_tables(self):
         print("creating tables")
-        await self.cur.execute('CREATE TABLE ad_types(id SERIAL PRIMARY KEY, type TEXT)')
-        await self.cur.execute('CREATE TABLE addons(id SERIAL PRIMARY KEY, type INT REFERENCES ad_types(id), url TEXT)')
-        await self.cur.execute("""CREATE TABLE questions(
+        con = await self.pool.acquire()
+        cur = await con.cursor()
+        await cur.execute('CREATE TABLE ad_types(id SERIAL PRIMARY KEY, type TEXT)')
+        await cur.execute('CREATE TABLE addons(id SERIAL PRIMARY KEY, type INT REFERENCES ad_types(id), url TEXT)')
+        await cur.execute("""CREATE TABLE questions(
                             id SERIAL PRIMARY KEY,
                             title TEXT,
                             description TEXT,
                             difficulty INTEGER CHECK(difficulty >=0 AND difficulty <=100),
                             addon_id INTEGER REFERENCES addons(id))""")
-        await self.cur.execute('CREATE TABLE tags(id SERIAL PRIMARY KEY, name TEXT UNIQUE)')
-        await self.cur.execute("""CREATE TABLE tags_quests(
+        await cur.execute('CREATE TABLE tags(id SERIAL PRIMARY KEY, name TEXT UNIQUE)')
+        await cur.execute("""CREATE TABLE tags_quests(
                             tag_id INTEGER REFERENCES tags(id) ON UPDATE CASCADE ON DELETE RESTRICT,
                             quest_id INTEGER REFERENCES questions(id) ON UPDATE CASCADE ON DELETE RESTRICT,
                             PRIMARY KEY(quest_id, tag_id))""")
-        await self.cur.execute("""CREATE TABLE rules(
+        await cur.execute("""CREATE TABLE rules(
                             id SERIAL PRIMARY KEY,
                             uri TEXT,
                             caller boolean,
                             callee boolean,
                             public boolean,
                             subscribe boolean)""")
-        await self.cur.execute("""CREATE TABLE games(
+        await cur.execute("""CREATE TABLE games(
                             tag_id SERIAL PRIMARY KEY,
                             beginning_time TIMESTAMP)""")
-        await self.cur.execute("""CREATE TABLE roles(
+        await cur.execute("""CREATE TABLE roles(
                             id SERIAL PRIMARY KEY,
                             name TEXT UNIQUE)""")
-        await self.cur.execute("""CREATE TABLE users(
+        await cur.execute("""CREATE TABLE users(
                             id SERIAL PRIMARY KEY,
                             name TEXT UNIQUE,
                             secret TEXT,
                             role_id INT REFERENCES roles(id) ON UPDATE CASCADE ON DELETE RESTRICT)""")
-        await self.cur.execute("""CREATE TABLE user_game(
+        await cur.execute("""CREATE TABLE user_game(
                             user_id INT UNIQUE REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT,
                             game_id INT REFERENCES games(tag_id) ON UPDATE CASCADE ON DELETE RESTRICT,
                             PRIMARY KEY(user_id, game_id))""")
-        await self.cur.execute("""CREATE TABLE roles_rules(
+        await cur.execute("""CREATE TABLE roles_rules(
                             role_id INTEGER REFERENCES roles(id) ON UPDATE CASCADE ON DELETE RESTRICT,
                             rule_id INTEGER REFERENCES rules(id) ON UPDATE CASCADE ON DELETE RESTRICT)""")
-        await self.cur.execute("""CREATE TABLE answers(
+        await cur.execute("""CREATE TABLE answers(
                             id SERIAL PRIMARY KEY,
                             game_id INTEGER REFERENCES games(tag_id) ON UPDATE CASCADE ON DELETE RESTRICT,
                             quest_id INTEGER REFERENCES questions(id) ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -145,68 +160,85 @@ class Dbase(ApplicationSession):
                             seconds FLOAT CHECK( seconds>0 AND seconds<=1000),
                             body TEXT)""")
 
-        await self.cur.execute("""INSERT INTO roles VALUES(0, 'root' )""")
-        await self.cur.execute("""INSERT INTO roles VALUES(1, 'backend' )""")
-        await self.cur.execute("""INSERT INTO roles VALUES(2, 'web-client' )""")
-        await self.cur.execute("""INSERT INTO roles VALUES(3, 'mobile-client' )""")
+        await cur.execute("""INSERT INTO roles VALUES(0, 'root' )""")
+        await cur.execute("""INSERT INTO roles VALUES(1, 'backend' )""")
+        await cur.execute("""INSERT INTO roles VALUES(2, 'web-client' )""")
+        await cur.execute("""INSERT INTO roles VALUES(3, 'mobile-client' )""")
 
-        await self.cur.execute("INSERT INTO ad_types(type) VALUES('PICTURE')")
-        await self.cur.execute("INSERT INTO ad_types(type) VALUES('AUDIO')")
-        await self.cur.execute("INSERT INTO ad_types(type) VALUES('VIDEO')")
+        await cur.execute("INSERT INTO ad_types(type) VALUES('PICTURE')")
+        await cur.execute("INSERT INTO ad_types(type) VALUES('AUDIO')")
+        await cur.execute("INSERT INTO ad_types(type) VALUES('VIDEO')")
 
-        await self.cur.execute("INSERT INTO users(name, secret, role_id) VALUES('database', '55555', 1)")
-        await self.cur.execute("INSERT INTO users(name, secret, role_id) VALUES('frontend', '971701', 2)")
-        await self.cur.execute("INSERT INTO users(name, secret, role_id) VALUES('mobile', '933421', 3)")
+        await cur.execute("INSERT INTO users(name, secret, role_id) VALUES('database', '55555', 1)")
+        await cur.execute("INSERT INTO users(name, secret, role_id) VALUES('frontend', '971701', 2)")
+        await cur.execute("INSERT INTO users(name, secret, role_id) VALUES('mobile', '933421', 3)")
 
-        await self.cur.execute("INSERT INTO questions(title, description, difficulty, addon_id) VALUES('Тестовый вопрос 1', 'Просто введи любой ответ', 1, NULL)")
+        await cur.execute("INSERT INTO questions(title, description, difficulty, addon_id) VALUES('Тестовый вопрос 1', 'Просто введи любой ответ', 1, NULL)")
 
-        await self.cur.execute("INSERT INTO rules(uri, caller, callee, public, subscribe) VALUES('com.quiz.model', TRUE, FALSE, FALSE, TRUE)")
-        await self.cur.execute("INSERT INTO rules(uri, caller, callee, public, subscribe) VALUES('com.quiz.model', TRUE, FALSE, FALSE, FALSE)")
+        await cur.execute("INSERT INTO rules(uri, caller, callee, public, subscribe) VALUES('com.quiz.model', TRUE, FALSE, FALSE, TRUE)")
+        await cur.execute("INSERT INTO rules(uri, caller, callee, public, subscribe) VALUES('com.quiz.model', TRUE, FALSE, FALSE, FALSE)")
         print("Tables created!")
+        print(self.pool.freesize)
+        await self.pool.release(con)
 
     async def set_tag(self, qnum, tag):
+        con = await self.pool.acquire()
+        cur = await con.cursor()
         if tag is not None:
             tnum = await self.get_tag_id(tag)
             try:
-                await self.cur.execute("INSERT INTO tags_quests VALUES(%s, %s)", (tnum, qnum,))
+                await cur.execute("INSERT INTO tags_quests VALUES(%s, %s)", (tnum, qnum,))
             except Exception as e:
                 print(e)
                 #raise e
+            finally:
+                print(self.pool.freesize)
+                await self.pool.release(con)
 
     async def add_question(self, question_json):
+        con = await self.pool.acquire()
+        cur = await con.cursor()
         quest_dict = json.loads(question_json)
         tag = quest_dict["tag"]
         question_tuple = (quest_dict["title"], quest_dict["description"], quest_dict["difficulty"], quest_dict["addon_id"])
-        await self.cur.execute("INSERT INTO questions(title, description, difficulty, addon_id) VALUES(%s, %s, %s, %s) RETURNING id", question_tuple)
-        #await self.cur.execute("SELECT last_insert_rowid()")
-        qnum = await self.cur.fetchone()[0]
+        await cur.execute("INSERT INTO questions(title, description, difficulty, addon_id) VALUES(%s, %s, %s, %s) RETURNING id", question_tuple)
+        #await cur.execute("SELECT last_insert_rowid()")
+        qnum = await cur.fetchone()[0]
+        print(self.pool.freesize)
+        await self.pool.release(con)
         self.set_tag(qnum, tag)
 
     async def get_tag_id(self, tag):
+        con = await self.pool.acquire()
+        cur = await con.cursor()
         tnum = None
-        await self.cur.execute("SELECT COUNT(id) FROM tags WHERE name=%s", (tag,))
-        rc = await self.cur.fetchone()
+        await cur.execute("SELECT COUNT(id) FROM tags WHERE name=%s", (tag,))
+        rc = await cur.fetchone()
         rc = rc[0]
         if rc > 1:
             raise ValueError('more than one row with the tag')
         if rc == 0:
-            await self.cur.execute("INSERT INTO tags(name) VALUES(%s) RETURNING id", (tag,))
-            #self.cur.execute("SELECT last_insert_rowid()")
-            tnum = await self.cur.fetchone()
+            await cur.execute("INSERT INTO tags(name) VALUES(%s) RETURNING id", (tag,))
+            #cur.execute("SELECT last_insert_rowid()")
+            tnum = await cur.fetchone()
             tnum = tnum[0]
         else:
-            await self.cur.execute("SELECT id FROM tags WHERE name=%s", (tag,))
-            tnum = await self.cur.fetchone()
+            await cur.execute("SELECT id FROM tags WHERE name=%s", (tag,))
+            tnum = await cur.fetchone()
             tnum = tnum[0]
+        print(self.pool.freesize)
+        await self.pool.release(con)
         return tnum
 
     async def get_group(self, tag_name: str):
-        await self.cur.execute("""SELECT questions.id, questions.title, questions.description,
+        con = await self.pool.acquire()
+        cur = await con.cursor()
+        await cur.execute("""SELECT questions.id, questions.title, questions.description,
                             questions.difficulty, questions.addon_id, addons.url
                             FROM questions JOIN tags_quests ON tags_quests.quest_id=questions.id
                             JOIN tags ON tags_quests.tag_id=tags.id
                             LEFT JOIN addons ON questions.addon_id=addons.id WHERE tags.name = %s""", (tag_name,))
-        fetch_res = await self.cur.fetchall()
+        fetch_res = await cur.fetchall()
         ret_res = []
         questions_array = []
         addon_dict = {}
@@ -217,19 +249,26 @@ class Dbase(ApplicationSession):
             questions_array.append(qdict)
         ret_res.append(questions_array)
         ret_res.append(addon_dict)
+        print(self.pool.freesize)
+        await self.pool.release(con)
         return json.dumps(ret_res)
         #self.con.commit()
 
+
     async def get_user_id(self, user_name):
+        con = await self.pool.acquire()
+        cur = await con.cursor()
         print("gettind id", user_name)
-        await self.cur.execute("SELECT id FROM users WHERE name=%s", (user_name,))
-        res = await self.cur.fetchone()
+        await cur.execute("SELECT id FROM users WHERE name=%s", (user_name,))
+        res = await cur.fetchone()
+        print(self.pool.freesize)
+        await self.pool.release(con)
         if res is not None:
             return res[0]
         else:
             raise ApplicationError("com.wrong_user_id", "wrong user name")
 
-    #TODO database cleaning
+            #TODO database cleaning
 
     def signal_handler(self, signum, frame):
         print('Signal handler called with signal', signum)
@@ -249,7 +288,7 @@ class Dbase(ApplicationSession):
 
     async def onDisconnect(self):
         print("Disconnecting")
-        await self.con.close()
+        await self.pool.close()
         asyncio.get_event_loop().stop()
 
     def onChallenge(self, challenge):
@@ -261,9 +300,8 @@ class Dbase(ApplicationSession):
 
     async def onJoin(self, details):
         signal.signal(signal.SIGINT, self.signal_handler)
-        self.con = await aiopg.connect(database="postgres", user="postgres", password="postgres")
+        self.pool = await aiopg.create_pool(database="postgres", user="postgres", password="postgres")
         #self.con.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-        self.cur = await self.con.cursor()
         # await self.cur.execute("PRAGMA foreign_keys = ON")
         if "create_table" in self.config.extra:
             await self.create_tables()
@@ -271,10 +309,15 @@ class Dbase(ApplicationSession):
         #if create_table:
         #   self.create_tables()
         # self.init_assistant()
-        # self.con.close()
+        #await self.pool.release(con)
+
 
         async def get_rules(self):
-            await self.cur.execute("SELECT * FROM rules")
+            con = await self.pool.acquire()
+            cur = await con.cursor()
+            await cur.execute("SELECT * FROM rules")
+            print(self.pool.freesize)
+            await self.pool.release(con)
 
         print("session attached")
         try:

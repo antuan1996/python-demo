@@ -25,12 +25,19 @@ class Component(ApplicationSession):
     async def on_question_posted(self, question_json):
         qdict = json.loads(question_json)
         if qdict["id"] == -1:
+            print("closing connection")
             await self.game.unsubscribe()
             self.leave()
             return
         adict = {"question_id": qdict["id"], "user_id": self.id, "body": "hello", "game_name": self.game_name}
         print("Sending normal question id:")
         answ = await self.call("com.assistant.add_answer", adict)
+        answ = await self.call("com.assistant.add_answer", adict)
+        answ = await self.call("com.assistant.add_answer", adict)
+        answ = await self.call("com.assistant.add_answer", adict)
+        answ = await self.call("com.assistant.add_answer", adict)
+        answ = await self.call("com.assistant.add_answer", adict)
+
         if answ:
             print("right answer published")
         else:

@@ -74,10 +74,11 @@ class Component(ApplicationSession):
             self.publish("com." + self.game_name + ".questions", json.dumps(question))
             await asyncio.sleep(0.1)
         print("questions published")
-        await asyncio.sleep(3)
-        print("Closing quiz")
+        await asyncio.sleep(8)
+        print("Closing quiz:")
         qdict = {"id": -1}
         self.publish("com." + self.game_name + ".questions", json.dumps(qdict))
+        print("closed")
 
     async def join_to_quiz(self, request_json):
         print("got join request")
