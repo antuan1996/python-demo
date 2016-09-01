@@ -1,9 +1,10 @@
 import json
 
-import requests
-from requests.auth import HTTPBasicAuth
-from PIL import Image
+#import requests
+#from requests.auth import HTTPBasicAuth
 
+
+import typing
 try:
     import asyncio
 except ImportError:
@@ -31,11 +32,8 @@ class Component(ApplicationSession):
             return
         adict = {"question_id": qdict["id"], "user_id": self.id, "body": "hello", "game_name": self.game_name}
         print("Sending normal question id:")
-        answ = await self.call("com.assistant.add_answer", adict)
-        answ = await self.call("com.assistant.add_answer", adict)
-        answ = await self.call("com.assistant.add_answer", adict)
-        answ = await self.call("com.assistant.add_answer", adict)
-        answ = await self.call("com.assistant.add_answer", adict)
+        for i in range(10):
+            self.call("com.assistant.add_answer", adict)
         answ = await self.call("com.assistant.add_answer", adict)
 
         if answ:
@@ -71,7 +69,7 @@ class Component(ApplicationSession):
         self.publish("com."+self.game_name+".join", json.dumps({"user_id": self.id, "event": "login"}))
         #self.leave()
 
-    def join_to_quiz(self, request_json):
+    def join_to_quiz(self, request_json: str):
         request = json.loads(request_json)
         #TODO business logic
         #self.publish("com." + quiz_name + ".user_migration")

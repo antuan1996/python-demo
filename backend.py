@@ -1,18 +1,15 @@
-import functools
-import json, jsonpickle
-import sqlite3
-import aiopg
-import time, datetime
+import json
+import time
+import datetime
 import signal
-from os import environ
-import string
-import msgpack
-from PIL import Image
+
 from autobahn.asyncio.wamp import ApplicationSession, ApplicationRunner
 from autobahn.wamp.exception import ApplicationError
 from xkcdpass import xkcd_password as xp
 import asyncio
 import aiopg
+
+from typing import Dict
 
 class Dbase(ApplicationSession):
 
@@ -26,10 +23,6 @@ class Dbase(ApplicationSession):
 
         async def leave(self):
             await self._sub.unsubscribe()
-
-    async def test_cor(self):
-        await asyncio.sleep(8)
-        return 123
 
     #TODO add game_id in answers table
     async def add_answer(self, answer):
@@ -51,12 +44,11 @@ class Dbase(ApplicationSession):
             print("Wrond question id", answer["question_id"], " vs",  self.cur_question_id)
             return False
 
-    async def on_question_posted(self, game_name, quest_json):
+    async def on_question_posted(self, game_name: str, quest_json: str):
         print("Got question for", game_name)
         con = await self.pool.acquire()
         cur = await con.cursor()
         print(json.loads(quest_json))
-        full_game_name = "com." + game_name
         self.games[game_name].prev_question_id = self.games[game_name].cur_question_id
         self.games[game_name].cur_question_id = json.loads(quest_json)["id"]
         self.games[game_name].question_start_time = time.time()
@@ -67,10 +59,10 @@ class Dbase(ApplicationSession):
                 print("disabling user with id=", user_id)
                 await cur.execute("UPDATE users SET role_id=NULL WHERE id=%s", (user_id,))
             await self.games[game_name].leave()
-        print(self.pool.freesize)
+        print("Amount of enabled connections", self.pool.freesize)
         await self.pool.release(con)
 
-    async def start_quiz(self, data):
+    async def start_quiz(self, data: Dict):
         print("Quiz registration was called")
         game_name = data["game_name"]
         participants = data["players"]
@@ -181,13 +173,13 @@ class Dbase(ApplicationSession):
         print(self.pool.freesize)
         await self.pool.release(con)
 
-    async def set_tag(self, qnum, tag):
+    async def set_tag(self, question_number: int, tag: str):
         con = await self.pool.acquire()
         cur = await con.cursor()
         if tag is not None:
-            tnum = await self.get_tag_id(tag)
+            tag_num = await self.get_tag_id(tag)
             try:
-                await cur.execute("INSERT INTO tags_quests VALUES(%s, %s)", (tnum, qnum,))
+                await cur.execute("INSERT INTO tags_quests VALUES(%s, %s)", (tag_num, question_number,))
             except Exception as e:
                 print(e)
                 #raise e
@@ -195,20 +187,21 @@ class Dbase(ApplicationSession):
                 print(self.pool.freesize)
                 await self.pool.release(con)
 
-    async def add_question(self, question_json):
+    async def add_question(self, question_json: str):
         con = await self.pool.acquire()
         cur = await con.cursor()
         quest_dict = json.loads(question_json)
         tag = quest_dict["tag"]
         question_tuple = (quest_dict["title"], quest_dict["description"], quest_dict["difficulty"], quest_dict["addon_id"])
-        await cur.execute("INSERT INTO questions(title, description, difficulty, addon_id) VALUES(%s, %s, %s, %s) RETURNING id", question_tuple)
+        await cur.execute("""INSERT INTO questions(title, description, difficulty,
+                            addon_id) VALUES(%s, %s, %s, %s) RETURNING id""", question_tuple)
         #await cur.execute("SELECT last_insert_rowid()")
-        qnum = await cur.fetchone()[0]
+        question_num = await cur.fetchone()[0]
         print(self.pool.freesize)
         await self.pool.release(con)
-        self.set_tag(qnum, tag)
+        self.set_tag(question_num, tag)
 
-    async def get_tag_id(self, tag):
+    async def get_tag_id(self, tag: str):
         con = await self.pool.acquire()
         cur = await con.cursor()
         tnum = None
@@ -254,8 +247,7 @@ class Dbase(ApplicationSession):
         return json.dumps(ret_res)
         #self.con.commit()
 
-
-    async def get_user_id(self, user_name):
+    async def get_user_id(self, user_name: str):
         con = await self.pool.acquire()
         cur = await con.cursor()
         print("gettind id", user_name)
@@ -288,7 +280,7 @@ class Dbase(ApplicationSession):
 
     async def onDisconnect(self):
         print("Disconnecting")
-        await self.pool.close()
+        self.pool.close()
         asyncio.get_event_loop().stop()
 
     def onChallenge(self, challenge):
@@ -302,15 +294,9 @@ class Dbase(ApplicationSession):
         signal.signal(signal.SIGINT, self.signal_handler)
         self.pool = await aiopg.create_pool(database="postgres", user="postgres", password="postgres")
         #self.con.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-        # await self.cur.execute("PRAGMA foreign_keys = ON")
+        #await self.cur.execute("PRAGMA foreign_keys = ON")
         if "create_table" in self.config.extra:
             await self.create_tables()
-
-        #if create_table:
-        #   self.create_tables()
-        # self.init_assistant()
-        #await self.pool.release(con)
-
 
         async def get_rules(self):
             con = await self.pool.acquire()
@@ -321,9 +307,7 @@ class Dbase(ApplicationSession):
 
         print("session attached")
         try:
-            await self.register(self.test_cor, "com.test")
             await self.register(self.get_user_id, "com.assistant.get_user_id")
-            #yield self.register(self.add_user, "com.admin.add_user")
             await self.register(self.add_answer, "com.assistant.add_answer")
             await self.register(self.add_question, "com.admin.add_question")
             await self.register(self.get_group, "com.admin.get_group")
@@ -337,11 +321,10 @@ class Dbase(ApplicationSession):
 
 def main():
     import  sys
-    dbase_name = "quiz.db"
     if len(sys.argv) >= 2:
         dbase_name = sys.argv[1]
     #runner = ApplicationRunner(u"ws://127.0.0.1:8080/ws", u"realm1", {"database_name": dbase_name, "create_table": None})
-    runner = ApplicationRunner(u"ws://127.0.0.1:8080/ws", u"realm1", {"database_name": "quiz.db"})
+    runner = ApplicationRunner(u"ws://127.0.0.1:8080/ws", u"realm1", {"database_name": "database"})
     runner.run(Dbase)
     #runner.run(Dbase(name='quiz.db', create_table=False))
     #base.create_tables()

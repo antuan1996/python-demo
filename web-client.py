@@ -1,8 +1,6 @@
-import json, jsonpickle
+import json
 
 import requests
-import umsgpack
-from PIL import Image
 from requests.auth import HTTPBasicAuth
 
 try:
@@ -72,7 +70,7 @@ class Component(ApplicationSession):
                 f.close()
                 print("downloaded", addon_name)
             self.publish("com." + self.game_name + ".questions", json.dumps(question))
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1)
         print("questions published")
         await asyncio.sleep(8)
         print("Closing quiz:")
